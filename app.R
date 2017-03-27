@@ -41,28 +41,30 @@ server <- function(input, output, session) {
   #' 
   #' @param x input data.frame, expected to have the folowing columns:
   #'             -"Green Red spot pairs - distance"
-  #'             -"Green Red spot pairs - GR_DistIndex"
   #'             -"Green Red spot pairs - GR_NucIndex"
   #'             -"Green Red spot pairs - GR_Spot1Index"
   #'             -"Green Red spot pairs - GR_Spot2Index"
   #' @return the minimized dataset
   minimize <- function(x) {
+    # get columns containing the color spot information
+    colorCols <- list(distance  =colnames(x)[grepl("\\w+ \\w+ spot pairs - distance"     , colnames(x))],
+                      DistIndex =colnames(x)[grepl("\\w+ \\w+ spot pairs - .+_DistIndex" , colnames(x))],
+                      NucIndex  =colnames(x)[grepl("\\w+ \\w+ spot pairs - .+_NucIndex"  , colnames(x))],
+                      Spot1Index=colnames(x)[grepl("\\w+ \\w+ spot pairs - .+_Spot1Index", colnames(x))],
+                      Spot2Index=colnames(x)[grepl("\\w+ \\w+ spot pairs - .+_Spot2Index", colnames(x))])
+    
     # validate data is properly formated
-    keyCols <- c("Row", "Column", "Timepoint", "Field", "Green Red spot pairs - GR_NucIndex", "experiment")
+    keyCols <- c("Row", "Column", "Timepoint", "Field", colorCols[["NucIndex"]], "experiment")
     if(!is.data.frame(x) |
-       !all(keyCols %in% colnames(x)) |
-       !all(c("Green Red spot pairs - distance",
-              "Green Red spot pairs - GR_DistIndex",
-              "Green Red spot pairs - GR_NucIndex",
-              "Green Red spot pairs - GR_Spot1Index",
-              "Green Red spot pairs - GR_Spot2Index") %in% colnames(x))
+       !all(keyCols   %in% colnames(x)) |
+       !all(colorCols %in% colnames(x))
     ) {
       return(NULL)
     }
     
     # remove incomplete cases
     x <- withProgress(message="removing incomplete cases", value=0, {
-      x <- x[x$`Green Red spot pairs - GR_Spot1Index` %in% 1:2 & x$`Green Red spot pairs - GR_Spot2Index` %in% 1:2, ]
+      x <- x[x[, colorCols[["Spot1Index"]]] %in% 1:2 & x[, colorCols[["Spot2Index"]]] %in% 1:2, ]
       x$key <- apply(x[, keyCols], 1, paste, collapse=" - ")
       completeKeys <- table(x$key)
       completeKeys <- names(completeKeys[completeKeys == 4])
@@ -71,14 +73,15 @@ server <- function(input, output, session) {
    
     #  minimize distances within each cell
     x.min <- withProgress(message="minimizing distances", value=1, {
-      data.table::rbindlist(by(x, x$key, function(x) {
-        data.table::rbindlist(by(x, x$`Green Red spot pairs - GR_Spot1Index`, function(x) {
-          x[which.min(x$`Green Red spot pairs - distance`), , drop=FALSE]
+      data.table::rbindlist(mclapply(split(x, x$key), function(x) {  # this guy runs in parallel
+        data.table::rbindlist(lapply(split(x, x[, colorCols[["Spot1Index"]]]), function(x) {
+          x[which.min(x[, colorCols[["distance"]]]), , drop=FALSE]
         }))
-      }))
+      }, mc.cores=getOption("mc.cores", 4L))) # use 4 cores by default
     })
+    x.min <- as.data.frame(x.min)
     
-    x.min[order(x.min$experiment, x.min$key), ]
+    x.min[order(x.min$experiment, x.min$key), !grepl("^\\bkey\\b$", colnames(x.min))]
   }
 
   ##
